@@ -1,0 +1,44 @@
+# Otari for the local pilot (pilot.md section 5): real Mistral and Exa only;
+# Vertex and Liner are left out for now. The otari service in docker-compose.yml
+# reads MISTRAL_API_KEY and EXA_API_KEY from .env. Its image listens on 8000
+# (OTARI_HOST and OTARI_PORT), which Compose publishes as 127.0.0.1:8100.
+
+database_url: "postgresql://otari:otari@postgres:5432/otari"
+master_key: ${OTARI_MASTER_KEY}
+auto_migrate: true
+default_pricing: false
+require_pricing: false
+files_provider_upload_enabled: false
+
+rate_limit_store: redis
+rate_limit_redis_url: "redis://redis:6379/0"
+
+providers:
+  mistral:                        # real
+    api_key: ${MISTRAL_API_KEY}
+    models: [mistral-small-2603]
+  exa_answers:                    # real
+    provider_type: openai
+    api_base: "https://api.exa.ai"
+    api_key: ${EXA_API_KEY}
+    models: [exa]
+
+# The bare names clients send through MLPA (Remote Settings, Android, iOS).
+aliases:
+  mistral-small-2603: mistral:mistral-small-2603
+  exa: exa_answers:exa
+
+pricing:
+  mistral:mistral-small-2603: {input_price_per_million: 0.10, output_price_per_million: 0.30}
+  # Token-priced, but real Exa answers report no usage, so these rows cost $0.
+  # Exa bills answers per request, which Otari prices only for tools.
+  exa_answers:exa: {input_price_per_million: 5.0, output_price_per_million: 5.0}
+  # Exa search is billed at the cost Exa reports with each result. This flat rate,
+  # $5 per 1,000 requests (USD per million requests), is what Otari reserves up
+  # front and charges when Exa reports none.
+  exa:exa-search: {input_price_per_million: 5000.0, output_price_per_million: 0.0, unit: requests}
+
+search_tools:
+  exa-search:                     # the name MLPA calls; real
+    provider: exa
+    api_key: ${EXA_API_KEY}

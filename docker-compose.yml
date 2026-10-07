@@ -1,0 +1,122 @@
+# The pilot's backend: Postgres, Redis, fakes :9100, Otari :8100, MLPA :8080.
+# `./run.sh up` starts it; Firefox runs on the host against the published ports.
+# The otari and mlpa images are built from their repositories' branches;
+# OTARI_SRC and MLPA_SRC (in the environment or .env) override either with
+# another git URL or a local checkout.
+name: otari-pilot
+services:
+  postgres:
+    image: postgres:17
+    container_name: otari_pilot_postgres
+    environment:
+      POSTGRES_USER: otari
+      POSTGRES_PASSWORD: otari
+      POSTGRES_DB: otari
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otari"]
+      interval: 2s
+      retries: 30
+  redis:
+    image: redis:8-alpine
+    container_name: otari_pilot_redis
+    ports: ["127.0.0.1:56379:6379"]
+
+  fakes:
+    image: python:3.13-slim
+    command: ["python", "/rig/fakes.py", "--host", "0.0.0.0", "--port", "9100"]
+    volumes: ["./fakes.py:/rig/fakes.py:ro"]
+    env_file: [{path: .env, required: false}]   # LINER_API_KEY, when set
+    ports: ["127.0.0.1:9100:9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/counts')"]
+      start_period: 30s
+      start_interval: 1s
+      interval: 60s
+
+  otari:
+    build: ${OTARI_SRC:-https://github.com/mozilla-ai/otari.git#main}
+    image: otari-pilot-otari
+    # The image listens on 0.0.0.0:8000 (OTARI_HOST, OTARI_PORT).
+    command: ["otari", "serve", "-c", "/rig/otari-config.yml"]
+    volumes: ["./otari-config.yml:/rig/otari-config.yml:ro"]
+    env_file: [{path: .env, required: false}]   # MISTRAL_API_KEY, EXA_API_KEY
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+    ports: ["127.0.0.1:8100:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+      fakes: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/readiness')"]
+      # Fast while starting, then rarely, so the health checks stay out of the logs.
+      start_period: 120s
+      start_interval: 1s
+      interval: 60s
+
+  # Once per `up`: MLPA's database, its migrations and signup cap, and its
+  # budgets and service key in Otari. The key reaches mlpa through `shared`.
+  mlpa-init:
+    build: ${MLPA_SRC:-https://github.com/daavoo/MLPA.git#otari-pilot}
+    image: otari-pilot-mlpa
+    env_file: [./mlpa.compose.env]
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        psql "postgresql://otari:otari@postgres:5432/otari" -tAc "SELECT 1 FROM pg_database WHERE datname='app_attest'" | grep -q 1 \
+          || psql "postgresql://otari:otari@postgres:5432/otari" -c 'CREATE DATABASE app_attest'
+        alembic --raiseerr -c alembic.ini -x sqlalchemy.url=postgresql://otari:otari@postgres:5432/app_attest upgrade head
+        psql "postgresql://otari:otari@postgres:5432/app_attest" -qc \
+          "INSERT INTO mlpa_user_capacity (id, max_identities, current_identities) VALUES (1, $${MLPA_MAX_SIGNED_IN_USERS}, 0)
+           ON CONFLICT (id) DO UPDATE SET max_identities = EXCLUDED.max_identities"
+        python scripts/otari_provision.py --rotate --env-file /shared/service-key.env
+    volumes: ["shared:/shared"]
+    depends_on:
+      otari: {condition: service_healthy}
+
+  mlpa:
+    build: ${MLPA_SRC:-https://github.com/daavoo/MLPA.git#otari-pilot}   # the image mlpa-init builds
+    image: otari-pilot-mlpa
+    env_file: [./mlpa.compose.env]
+    command: ["sh", "-c", "set -a; . /shared/service-key.env; set +a; exec /app/docker-entrypoint.sh"]
+    volumes:
+      - shared:/shared:ro
+      - ./devauth:/devauth:ro
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+      # The fake Mozilla account (devauth/sitecustomize.py); off with REAL_ACCOUNT=1.
+      PYTHONPATH: /devauth
+      PILOT_FXA_TOKEN: pilot-fxa-token
+      PILOT_FXA_UID: 0123456789abcdef0123456789abcdef
+      REAL_ACCOUNT: ${REAL_ACCOUNT:-0}
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      mlpa-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/liveness')"]
+      # Fast while starting, then rarely, so the health checks stay out of the logs.
+      start_period: 120s
+      start_interval: 1s
+      interval: 60s
+
+  # `./run.sh check`: check.py from MLPA's image, which has the MLPA code it
+  # mints access tokens with, against the services by name.
+  check:
+    image: otari-pilot-mlpa
+    profiles: [check]
+    env_file: [./mlpa.compose.env]
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+      MLPA_URL: http://mlpa:8080
+      OTARI_URL: http://otari:8000
+      FAKES_URL: http://fakes:9100
+    command: ["python", "/rig/check.py"]
+    volumes: ["./check.py:/rig/check.py:ro"]
+
+volumes:
+  shared:

@@ -3,12 +3,13 @@
 The pilot of [Otari](https://github.com/mozilla-ai/otari) as the gateway behind
 Firefox's AI features, runnable locally. [MLPA](https://github.com/Firefox-AI/MLPA)
 runs with `GATEWAY_BACKEND=otari` in front of a local Otari, which calls real
-Mistral and Exa. Vertex and Liner are left out of `otari-config.yml` for now;
-`fakes.py` still runs, with stand-ins for both, for when they come back.
+Vertex, Mistral and Exa. Liner is left out of `otari-config.yml` for now, and
+`fakes.py` stands in for the provider failures the checks need (a 429 and a
+prompt too long for the model).
 
 ```
 Firefox (Smart Window) ─┐
-check.py (as desktop,   ┼──► MLPA :8080 ──► Otari :8100 ──► Mistral, Exa (chat, answers, search)
+check.py (as desktop,   ┼──► MLPA :8080 ──► Otari :8100 ──► Vertex, Mistral, Exa (chat, answers, search)
   Android and iOS)      ┘                    │
                                              ├──► Postgres :55432 (otari, app_attest)
                                              └──► Redis :56379 (rate_limits)
@@ -16,12 +17,14 @@ check.py (as desktop,   ┼──► MLPA :8080 ──► Otari :8100 ──► 
 
 ## Run it
 
-It needs Docker, on macOS or Linux, and `MISTRAL_API_KEY` and `EXA_API_KEY`
-in `.env`.
+It needs Docker, on macOS or Linux, and in `.env`: `MISTRAL_API_KEY`,
+`EXA_API_KEY`, and `VERTEX_PROJECT`, a GCP project with Vertex AI enabled. Put
+the key of a service account with the Vertex AI User role in
+`state/vertex-sa.json`, or point `VERTEX_CREDENTIALS` at it.
 
 ```bash
 ./run.sh up      # the backend in Docker, then Firefox with Smart Window pointed at it
-./run.sh check   # 32 end-to-end checks through MLPA (those on Vertex and Liner fail for now)
+./run.sh check   # 35 end-to-end checks through MLPA (Liner's and Mistral on Vertex fail for now)
 ./run.sh down    # stops the backend and drops the databases
 ```
 
@@ -107,10 +110,11 @@ authenticates with an MLPA access token (`use-play-integrity`).
 ## Not covered yet
 
 - **Real upstreams.**
-  - Otari's `vertexai` provider calls `generateContent`. Whether Vertex's
-    partner models (Qwen, and Mistral on Vertex) accept that is unconfirmed.
-    The fallback is an `openai` instance on Vertex's OpenAI-compatible
-    endpoint.
+  - Vertex serves Gemini 3.1 Flash Lite (`global`) and Qwen 3 235B
+    (`us-south1`) through Otari's `vertexai` provider (`generateContent`).
+    Mistral Small 2503 on Vertex needs enabling in Model Garden, and Otari
+    asks for it under the `google` publisher. Pay-as-you-go Vertex answers an
+    occasional 429, which reaches clients as `{error: 5}`.
   - Liner's quick-answer API is not OpenAI-compatible (`answer` plus
     `references`). `fakes.py` holds the translation; done properly, it is an
     any-llm provider.

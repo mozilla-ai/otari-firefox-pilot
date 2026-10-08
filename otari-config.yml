@@ -1,6 +1,8 @@
-# Otari for the local pilot (pilot.md section 5): real Mistral and Exa only;
-# Vertex and Liner are left out for now. The otari service in docker-compose.yml
-# reads MISTRAL_API_KEY and EXA_API_KEY from .env. Its image listens on 8000
+# Otari for the local pilot (pilot.md section 5): real Vertex, Mistral and Exa;
+# Liner is left out for now, and fakes.py stands in for the provider failures the
+# checks need. The otari service in docker-compose.yml reads MISTRAL_API_KEY,
+# EXA_API_KEY and VERTEX_PROJECT from .env, and mounts the Vertex service
+# account key at VERTEX_CREDENTIALS (default state/vertex-sa.json). Its image listens on 8000
 # (OTARI_HOST and OTARI_PORT), which Compose publishes as 127.0.0.1:8100.
 
 database_url: "postgresql://otari:otari@postgres:5432/otari"
@@ -14,6 +16,26 @@ rate_limit_store: redis
 rate_limit_redis_url: "redis://redis:6379/0"
 
 providers:
+  # Named vertex_ai, LiteLLM's prefix, so the LiteLLM model names MLPA and the eval
+  # harness send (vertex_ai/mistral-small-2503) resolve as instance/model. Qwen is
+  # served from us-south1, as in MLPA's LiteLLM config.
+  vertex_ai:                      # real
+    provider_type: vertexai
+    credentials: /rig/vertex-sa.json
+    project: ${VERTEX_PROJECT}
+    location: us-south1
+    models: [qwen/qwen3-235b-a22b-instruct-2507-maas, mistral-small-2503]
+  vertex_global:                  # real; Gemini 3.1 Flash Lite is only served globally
+    provider_type: vertexai
+    credentials: /rig/vertex-sa.json
+    project: ${VERTEX_PROJECT}
+    location: global
+    models: [gemini-3.1-flash-lite]
+  vertex_fake:                    # fakes.py: a provider 429 and a context-length refusal
+    provider_type: openai
+    api_base: "http://fakes:9100/vertexai"
+    api_key: fake
+    models: [gemini-2.5-flash-lite-429, gemini-2.5-flash-lite-tiny-context]
   mistral:                        # real
     api_key: ${MISTRAL_API_KEY}
     models: [mistral-small-2603]
@@ -24,11 +46,22 @@ providers:
     models: [exa]
 
 # The bare names clients send through MLPA (Remote Settings, Android, iOS).
+# An alias cannot contain '/', which is why the vertex instance carries the prefix.
 aliases:
+  gemini-3.1-flash-lite: vertex_global:gemini-3.1-flash-lite
+  qwen3-235b-a22b-instruct-2507-maas: vertex_ai:qwen/qwen3-235b-a22b-instruct-2507-maas
+  moz-summarization: vertex_global:gemini-3.1-flash-lite
+  throttled: vertex_fake:gemini-2.5-flash-lite-429
+  tiny-context: vertex_fake:gemini-2.5-flash-lite-tiny-context
   mistral-small-2603: mistral:mistral-small-2603
   exa: exa_answers:exa
 
 pricing:
+  vertex_global:gemini-3.1-flash-lite: {input_price_per_million: 0.10, output_price_per_million: 0.40}
+  vertex_ai:qwen/qwen3-235b-a22b-instruct-2507-maas: {input_price_per_million: 0.22, output_price_per_million: 0.88}
+  vertex_ai:mistral-small-2503: {input_price_per_million: 0.10, output_price_per_million: 0.30}
+  vertex_fake:gemini-2.5-flash-lite-429: {input_price_per_million: 0.10, output_price_per_million: 0.40}
+  vertex_fake:gemini-2.5-flash-lite-tiny-context: {input_price_per_million: 0.10, output_price_per_million: 0.40}
   mistral:mistral-small-2603: {input_price_per_million: 0.10, output_price_per_million: 0.30}
   # Token-priced, but real Exa answers report no usage, so these rows cost $0.
   # Exa bills answers per request, which Otari prices only for tools.

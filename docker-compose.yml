@@ -39,10 +39,14 @@ services:
     image: otari-pilot-otari
     # The image listens on 0.0.0.0:8000 (OTARI_HOST, OTARI_PORT).
     command: ["otari", "serve", "-c", "/rig/otari-config.yml"]
-    volumes: ["./otari-config.yml:/rig/otari-config.yml:ro"]
-    env_file: [{path: .env, required: false}]   # MISTRAL_API_KEY, EXA_API_KEY
+    volumes:
+      - ./otari-config.yml:/rig/otari-config.yml:ro
+      - ${VERTEX_CREDENTIALS:-./state/vertex-sa.json}:/rig/vertex-sa.json:ro
+    env_file: [{path: .env, required: false}]   # MISTRAL_API_KEY, EXA_API_KEY, VERTEX_PROJECT
     environment:
       OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+      # Vertex authenticates through Google's default credentials, as on GKE.
+      GOOGLE_APPLICATION_CREDENTIALS: /rig/vertex-sa.json
     ports: ["127.0.0.1:8100:8000"]
     depends_on:
       postgres: {condition: service_healthy}

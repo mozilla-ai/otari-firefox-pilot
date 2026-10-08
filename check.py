@@ -59,12 +59,16 @@ def chat(
     *,
     stream: bool = False,
     purpose: str | None = None,
+    prompt: str = "What is Firefox?",
+    max_tokens: int | None = None,
 ) -> httpx.Response:
     body = {
         "model": model,
-        "messages": [{"role": "user", "content": "What is Firefox?"}],
+        "messages": [{"role": "user", "content": prompt}],
         "stream": stream,
     }
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     return client.post(
         f"{MLPA}/v1/chat/completions",
         json=body,
@@ -129,8 +133,7 @@ sw = identity()
 r = chat(sw, "ai", "qwen3-235b-a22b-instruct-2507-maas", purpose="chat")
 check(
     "smart window: chat (ai)",
-    r.status_code == 200
-    and "Hello from vertexai" in r.json()["choices"][0]["message"]["content"],
+    r.status_code == 200 and bool(r.json()["choices"][0]["message"]["content"]),
     r.text,
 )
 check(
@@ -305,7 +308,11 @@ check(
     (r.status_code, r.text),
 )
 limited = identity()
-statuses = [chat(limited, "memories", "mistral-small-2603") for _ in range(11)]
+# A short reply, so 10 requests stay under the per-user TPM and RPM refuses the 11th.
+statuses = [
+    chat(limited, "memories", "mistral-small-2603", prompt="Reply with OK.", max_tokens=5)
+    for _ in range(11)
+]
 last = statuses[-1]
 check(
     "per-user rpm (memories: 10/min) -> 429 {error: 2} with Retry-After",

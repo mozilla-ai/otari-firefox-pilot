@@ -299,7 +299,8 @@ check(
 )
 
 # Refusals, and the error codes clients map them to
-r = chat(identity(), "telemetry", "gemini-3.1-flash-lite")
+# mochi-dev carries a budget too small for any request (mlpa.compose.env).
+r = chat(identity(), "mochi-dev", "gemini-3.1-flash-lite", purpose="chat")
 check(
     "per-user budget refusal -> 429 {error: 1}",
     r.status_code == 429

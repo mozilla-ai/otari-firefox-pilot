@@ -49,7 +49,6 @@ providers:
 # An alias cannot contain '/', which is why the vertex instance carries the prefix.
 aliases:
   gemini-3.1-flash-lite: vertex_global:gemini-3.1-flash-lite
-  qwen3-235b-a22b-instruct-2507-maas: vertex_ai:qwen/qwen3-235b-a22b-instruct-2507-maas
   moz-summarization: vertex_global:gemini-3.1-flash-lite
   throttled: vertex_fake:gemini-2.5-flash-lite-429
   tiny-context: vertex_fake:gemini-2.5-flash-lite-tiny-context
@@ -63,13 +62,23 @@ pricing:
   vertex_fake:gemini-2.5-flash-lite-429: {input_price_per_million: 0.10, output_price_per_million: 0.40}
   vertex_fake:gemini-2.5-flash-lite-tiny-context: {input_price_per_million: 0.10, output_price_per_million: 0.40}
   mistral:mistral-small-2603: {input_price_per_million: 0.10, output_price_per_million: 0.30}
-  # Token-priced, but real Exa answers report no usage, so these rows cost $0.
-  # Exa bills answers per request, which Otari prices only for tools.
-  exa_answers:exa: {input_price_per_million: 5.0, output_price_per_million: 5.0}
+  # Exa bills answers per request ($0.005), and reports no token usage.
+  exa_answers:exa: {input_price_per_million: 5000.0, output_price_per_million: 0.0, unit: requests}
   # Exa search is billed at the cost Exa reports with each result. This flat rate,
   # $5 per 1,000 requests (USD per million requests), is what Otari reserves up
   # front and charges when Exa reports none.
   exa:exa-search: {input_price_per_million: 5000.0, output_price_per_million: 0.0, unit: requests}
+
+# Qwen on pay-as-you-go Vertex answers an occasional 429, so the name clients send
+# is a policy rather than an alias: a failure before any response is sent (a 429,
+# a 5xx) falls back to Gemini, and the client never sees it.
+routing:
+  policies:
+    qwen3-235b-a22b-instruct-2507-maas:
+      select:
+        - default: vertex_ai:qwen/qwen3-235b-a22b-instruct-2507-maas
+      on_failure:
+        - vertex_global:gemini-3.1-flash-lite
 
 search_tools:
   exa-search:                     # the name MLPA calls; real

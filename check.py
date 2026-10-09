@@ -251,11 +251,24 @@ def usage_rows(user_id: str, expected: int, **params: str) -> list[dict]:
 
 # Request tags: MLPA's spend_logs_metadata lands on each usage row
 chat_rows = usage_rows(ai_user["user_id"], 3, tag="purpose:chat") if ai_user else []
+# A Qwen call that falls back to Gemini also leaves a row for its failed attempt.
+chat_rows = [
+    row for row in chat_rows if row["status"] == "success" or not row.get("policy_name")
+]
 check(
     "otari: smart window chat rows carry MLPA's purpose and country tags",
     len(chat_rows) == 3
     and all(row["tags"] == {"purpose": "chat", "country_code": ""} for row in chat_rows),
     chat_rows,
+)
+
+# Exa answers report no tokens and are priced per request
+answer_user = otari_end_user(f"{ios}:answer")
+answer_rows = usage_rows(answer_user["user_id"], 1) if answer_user else []
+check(
+    "otari: exa answers are billed per request ($0.005)",
+    len(answer_rows) == 1 and answer_rows[0]["cost"] == 0.005,
+    answer_rows,
 )
 memory_rows = (
     usage_rows(memories_user["user_id"], 1, tag="purpose:memory-generation")
@@ -308,6 +321,28 @@ check(
     and r.headers.get("retry-after") == "86400",
     (r.status_code, r.text),
 )
+# The global budget: a ceiling on MLPA's service key, pooling every end user.
+# Lowered below any request for a moment, then put back.
+global_budget = client.get(f"{OTARI}/budgets/mlpa-global", headers=OTARI_MASTER).json()
+client.patch(
+    f"{OTARI}/budgets/mlpa-global", json={"max_budget": 0.000001}, headers=OTARI_MASTER
+)
+try:
+    r = chat(identity(), "ai", "gemini-3.1-flash-lite", purpose="chat")
+finally:
+    client.patch(
+        f"{OTARI}/budgets/mlpa-global",
+        json={"max_budget": global_budget["max_budget"]},
+        headers=OTARI_MASTER,
+    )
+check(
+    "global budget (the service key's ceiling) -> 500 {error: 10} with Retry-After",
+    r.status_code == 500
+    and error_code(r) == 10
+    and r.headers.get("retry-after") == "300",
+    (r.status_code, r.text),
+)
+
 limited = identity()
 # A short reply, so 10 requests stay under the per-user TPM and RPM refuses the 11th.
 statuses = [

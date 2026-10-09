@@ -24,7 +24,7 @@ the key of a service account with the Vertex AI User role in
 
 ```bash
 ./run.sh up      # the backend in Docker, then Firefox with Smart Window pointed at it
-./run.sh check   # 35 end-to-end checks through MLPA (Liner's and Mistral on Vertex fail for now)
+./run.sh check   # 37 end-to-end checks through MLPA (Liner's and Mistral on Vertex fail for now)
 ./run.sh down    # stops the backend and drops the databases
 ```
 
@@ -94,14 +94,17 @@ authenticates with an MLPA access token (`use-play-integrity`).
 - **Citations.** Exa and Liner citations arrive under
   `message.provider_specific_fields.citations`.
 - **Billing.** Spend lands on the end user, under its service type's budget,
-  for search as well as chat. MLPA's `metadata` never reaches a provider.
+  for search as well as chat. Exa answers, which report no tokens, are billed
+  per request ($0.005). MLPA's `metadata` never reaches a provider.
+- **Budgets.** Every budget resets at UTC midnight, and a global budget on
+  MLPA's service key (`OTARI_GLOBAL_MAX_BUDGET`) pools every end user's spend.
 - **Request tags.** MLPA's `purpose` and `country_code` land on each usage row
   as tags, queryable with `tag=purpose:chat` and summed with
   `group_by_tag=purpose`, the report MLPA builds from LiteLLM's spend logs today.
 - **Refusal codes.** Per-user budget gives `{error: 1}`, per-user RPM gives
   `{error: 2}` (each service type separately), a prompt too long for the model
-  gives `{error: 3}`, a provider 429 gives `{error: 5}`, and an unknown model
-  gives `{error: 8}`. MLPA maps these from Otari's error code, with no text
+  gives `{error: 3}`, a provider 429 gives `{error: 5}`, an unknown model
+  gives `{error: 8}`, and the global budget gives `{error: 10}`. MLPA maps these from Otari's error code, with no text
   matching.
 - **Admin API.** MLPA's block, unblock, budget move, user info, list and
   per-service-type counts, all backed by Otari's users API. Moving a user to
@@ -114,20 +117,16 @@ authenticates with an MLPA access token (`use-play-integrity`).
     (`us-south1`) through Otari's `vertexai` provider (`generateContent`).
     Mistral Small 2503 on Vertex needs enabling in Model Garden, and Otari
     asks for it under the `google` publisher. Pay-as-you-go Vertex answers an
-    occasional 429, which reaches clients as `{error: 5}`.
+    occasional 429; for Qwen, a routing policy falls back to Gemini, so
+    clients don't see it. Qwen also returns an empty reply now and then
+    (mozilla-ai/any-llm#1448), which MLPA answers with a 502.
   - Liner's quick-answer API is not OpenAI-compatible (`answer` plus
     `references`). `fakes.py` holds the translation; done properly, it is an
     any-llm provider.
-- **Exa answers cost.** Exa bills answers per request, and its answer
-  endpoint reports no token usage, so the token-priced `exa_answers:exa` rows
-  cost $0. Otari prices per request only for tools such as search (which Exa
-  reports its own cost for), not for a chat model.
 - **`x-litellm-*` metrics.** MLPA's backend, fallback and cost metrics read
   `unknown` or 0 under Otari.
 - **Search response.** Otari returns `date` where Firefox reads
   `publishedDate`. LiteLLM's response has the same gap.
-- **Global budget (code 10).** It maps from any non-user budget scope, but no
-  scoped ceiling is provisioned on the service keys.
 - **Budget admission.** Otari reserves each request's estimated cost up front.
   With `max_tokens: 8192`, a user near their cap is refused sooner than
   LiteLLM, which checks only spend so far.

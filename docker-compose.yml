@@ -1,0 +1,119 @@
+# The pilot's backend: Postgres, Redis, fakes :9100, Otari :8100, MLPA :8080.
+# `./run.sh up` starts it; Firefox runs on the host against the published ports.
+# The otari and mlpa images are built from their repositories' branches;
+# OTARI_SRC and MLPA_SRC (in the environment or .env) override either with
+# another git URL or a local checkout.
+#
+# MLPA's service key is a fixed local value, like the master key: otari-config.yml
+# declares it from MLPA_SERVICE_KEY, and MLPA sends it as OTARI_SERVICE_KEY.
+# MLPA_LOADTEST_KEY and MLPA_CONCURRENCY_KEY are the load and concurrency tests'
+# keys, which their clients send through MLPA.
+name: otari-pilot
+services:
+  postgres:
+    image: postgres:17
+    container_name: otari_pilot_postgres
+    environment:
+      POSTGRES_USER: otari
+      POSTGRES_PASSWORD: otari
+      POSTGRES_DB: otari
+    ports: ["127.0.0.1:55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otari"]
+      interval: 2s
+      retries: 30
+  redis:
+    image: redis:8-alpine
+    container_name: otari_pilot_redis
+    ports: ["127.0.0.1:56379:6379"]
+
+  fakes:
+    image: python:3.13-slim
+    command: ["python", "/rig/fakes.py", "--host", "0.0.0.0", "--port", "9100"]
+    volumes: ["./fakes.py:/rig/fakes.py:ro"]
+    ports: ["127.0.0.1:9100:9100"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/counts')"]
+      start_period: 30s
+      start_interval: 1s
+      interval: 60s
+
+  otari:
+    build: ${OTARI_SRC:-https://github.com/mozilla-ai/otari.git#v0.25.0}
+    image: otari-pilot-otari
+    # The image listens on 0.0.0.0:8000 (OTARI_HOST, OTARI_PORT).
+    command: ["otari", "serve", "-c", "/rig/otari-config.yml"]
+    volumes:
+      - ./otari-config.yml:/rig/otari-config.yml:ro
+      - ${VERTEX_CREDENTIALS:-./state/vertex-sa.json}:/rig/vertex-sa.json:ro
+    env_file: [{path: .env, required: false}]   # MISTRAL_API_KEY, EXA_API_KEY, VERTEX_PROJECT
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+      MLPA_SERVICE_KEY: ${MLPA_SERVICE_KEY:-tk-pilot-Bbm0emYZ6RTy8R-5RrxM8nUyqVVdEHC2nfiDRVcIGGiEhpoDHMyEwKtk6eW48vgb}
+      MLPA_CONCURRENCY_KEY: ${MLPA_CONCURRENCY_KEY:-tk-concurrency-ZKgQTTGyZ6M3ki2Qaj3NB-az9zHZ5nB__yyucrfoHIAm1zmhJaiQXfqNwwQUIJtt}
+      MLPA_LOADTEST_KEY: ${MLPA_LOADTEST_KEY:-tk-loadtest-sOQPAEg4pls6G33bAJO65LQgRXfINGRaFj9A-k2ER94EOAH2hhEByzG6fby_17nC}
+      # Vertex authenticates through Google's default credentials, as on GKE.
+      GOOGLE_APPLICATION_CREDENTIALS: /rig/vertex-sa.json
+    ports: ["127.0.0.1:8100:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+      fakes: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/readiness')"]
+      # Fast while starting, then rarely, so the health checks stay out of the logs.
+      start_period: 120s
+      start_interval: 1s
+      interval: 60s
+
+  mlpa:
+    build: ${MLPA_SRC:-https://github.com/daavoo/MLPA.git#otari-pilot}
+    image: otari-pilot-mlpa
+    env_file: [./mlpa.compose.env]
+    # Before serving: MLPA's database, its migrations and its signup cap.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        psql "postgresql://otari:otari@postgres:5432/otari" -tAc "SELECT 1 FROM pg_database WHERE datname='app_attest'" | grep -q 1 \
+          || psql "postgresql://otari:otari@postgres:5432/otari" -c 'CREATE DATABASE app_attest'
+        alembic --raiseerr -c alembic.ini -x sqlalchemy.url=postgresql://otari:otari@postgres:5432/app_attest upgrade head
+        psql "postgresql://otari:otari@postgres:5432/app_attest" -qc \
+          "INSERT INTO mlpa_user_capacity (id, max_identities, current_identities) VALUES (1, $${MLPA_MAX_SIGNED_IN_USERS}, 0)
+           ON CONFLICT (id) DO UPDATE SET max_identities = EXCLUDED.max_identities"
+        exec /app/docker-entrypoint.sh
+    volumes: ["./devauth:/devauth:ro"]
+    environment:
+      OTARI_SERVICE_KEY: ${MLPA_SERVICE_KEY:-tk-pilot-Bbm0emYZ6RTy8R-5RrxM8nUyqVVdEHC2nfiDRVcIGGiEhpoDHMyEwKtk6eW48vgb}
+      # The fake Mozilla account (devauth/sitecustomize.py); off with REAL_ACCOUNT=1.
+      PYTHONPATH: /devauth
+      PILOT_FXA_TOKEN: pilot-fxa-token
+      PILOT_FXA_UID: 0123456789abcdef0123456789abcdef
+      REAL_ACCOUNT: ${REAL_ACCOUNT:-0}
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      otari: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/liveness')"]
+      # Fast while starting, then rarely, so the health checks stay out of the logs.
+      start_period: 120s
+      start_interval: 1s
+      interval: 60s
+
+  # `./run.sh check`: check.py from MLPA's image, which has the MLPA code it
+  # mints access tokens with, against the services by name.
+  check:
+    image: otari-pilot-mlpa
+    profiles: [check]
+    env_file: [./mlpa.compose.env]
+    environment:
+      OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
+      MLPA_CONCURRENCY_KEY: ${MLPA_CONCURRENCY_KEY:-tk-concurrency-ZKgQTTGyZ6M3ki2Qaj3NB-az9zHZ5nB__yyucrfoHIAm1zmhJaiQXfqNwwQUIJtt}
+      MLPA_LOADTEST_KEY: ${MLPA_LOADTEST_KEY:-tk-loadtest-sOQPAEg4pls6G33bAJO65LQgRXfINGRaFj9A-k2ER94EOAH2hhEByzG6fby_17nC}
+      MLPA_URL: http://mlpa:8080
+      OTARI_URL: http://otari:8000
+      FAKES_URL: http://fakes:9100
+    command: ["python", "/rig/check.py"]
+    volumes:
+      - ./check.py:/rig/check.py:ro

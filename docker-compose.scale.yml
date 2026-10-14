@@ -1,0 +1,49 @@
+# Otari as several replicas behind a load balancer, on top of docker-compose.yml:
+# `REPLICAS=3 ./run.sh up`. The `otari` service starts first and migrates the
+# database (Otari's migrations take no lock, so replicas must not race on a fresh
+# one, as a production deploy runs its migration once before the replicas); the
+# REPLICAS - 1 others start once it is healthy. All share Postgres and Redis, and
+# MLPA reaches them through `otari-lb`, which spreads requests over every replica.
+# Docker's own DNS round-robin is not enough: MLPA keeps its connections open, so
+# it would stay on one replica.
+services:
+  otari-replica:
+    extends:
+      file: docker-compose.yml
+      service: otari
+    ports: !reset []
+    deploy:
+      replicas: ${OTARI_REPLICAS:-2}
+    depends_on:
+      otari: {condition: service_healthy}
+
+  otari-lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./otari-lb.conf:/etc/nginx/conf.d/default.conf:ro
+      - lb-logs:/var/log/otari-lb
+    depends_on:
+      otari: {condition: service_healthy}
+      otari-replica: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/api/v1/health/readiness"]
+      start_period: 30s
+      start_interval: 1s
+      interval: 60s
+
+  mlpa:
+    environment:
+      OTARI_API_BASE: http://otari-lb:8000
+    depends_on:
+      otari-lb: {condition: service_healthy}
+
+  check:
+    environment:
+      OTARI_URL: http://otari-lb:8000
+      # concurrency.py reports which replica served each request from here.
+      LB_LOG: /var/log/otari-lb/access.log
+    volumes:
+      - lb-logs:/var/log/otari-lb:ro
+
+volumes:
+  lb-logs:

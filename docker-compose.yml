@@ -117,3 +117,6 @@ services:
     command: ["python", "/rig/check.py"]
     volumes:
       - ./check.py:/rig/check.py:ro
+      - ./loadtest.py:/rig/loadtest.py:ro
+      - ./concurrency.py:/rig/concurrency.py:ro
+      - ./reset_watch.py:/rig/reset_watch.py:ro

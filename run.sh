@@ -6,7 +6,7 @@
 #   ./run.sh check  end-to-end checks through MLPA, as each client calls it
 #   ./run.sh down   stop the backend and drop the databases
 #
-# `up` builds Otari from its v0.25.0 release and MLPA from the latest commit of its
+# `up` builds Otari from its v0.28.0 release and MLPA from the latest commit of its
 # otari-pilot branch on GitHub; OTARI_SRC and MLPA_SRC override either with
 # another git URL or a local checkout. FIREFOX is the Firefox binary to run
 # (default: the latest Nightly for macOS or Linux, downloaded into state/nightly

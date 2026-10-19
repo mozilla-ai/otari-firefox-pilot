@@ -156,6 +156,9 @@ search_tools:
 #   use mochi-dev;
 # - mlpa-global, the global budget ({error: 10}): a daily ceiling in USD on
 #   MLPA's key across every end user. check.py lowers it for a moment.
+# - the guest budgets (#296) and mlpa-guest-global, the guest budget
+#   ({error: 11}): a daily ceiling on MLPA's guest key across every guest, apart
+#   from signed-in users. check.py lowers it for a moment.
 budgets:
   end-user-budget-ai:           {max_budget: 0.1,  reset_alignment: calendar_day,  rpm_limit: 40,  tpm_limit: 100000}
   end-user-budget-s2s:          {max_budget: 0.1,  reset_alignment: calendar_day,  rpm_limit: 40,  tpm_limit: 2000}
@@ -173,6 +176,10 @@ budgets:
   end-user-budget-mochi-dev:    {max_budget: 0.006, reset_alignment: calendar_day, rpm_limit: 200, tpm_limit: 10000}
   end-user-budget-search-dev:   {max_budget: 1.0,  reset_alignment: calendar_day,  rpm_limit: 200, tpm_limit: 10000}
   mlpa-global:                  {max_budget: 100,  reset_alignment: calendar_day}
+  end-user-budget-ai-guest:       {max_budget: 0.05, reset_alignment: calendar_day, rpm_limit: 20, tpm_limit: 100000}
+  end-user-budget-memories-guest: {max_budget: 0.05, reset_alignment: calendar_day, rpm_limit: 10, tpm_limit: 100000}
+  end-user-budget-search-guest:   {max_budget: 0.01, reset_alignment: calendar_day, rpm_limit: 5,  tpm_limit: 2000}
+  mlpa-guest-global:              {max_budget: 10,   reset_alignment: calendar_day}
   # Load tests' own budget: loose enough that the test measures the stack, not
   # the limits.
   # concurrency.py's per-user budget: ten $0.005 requests, and no eleventh.
@@ -204,6 +211,21 @@ api_keys:
       - end-user-budget-search-dev
     end_user_budget_id: end-user-budget-ai
     ceiling: mlpa-global
+
+  # MLPA's guest key (#296), for the *-guest service types MLPA serves to guest
+  # tokens: the counterpart of LiteLLM's MLPA_GUEST_VIRTUAL_KEY. Same owner as
+  # `mlpa`, so MLPA's service key still reads and blocks guests. It may assign
+  # only the guest budgets, and its ceiling pools every guest.
+  mlpa-guest:
+    secret: ${MLPA_GUEST_SERVICE_KEY}
+    user_id: mlpa
+    is_service_key: true
+    end_user_budget_ids:
+      - end-user-budget-ai-guest
+      - end-user-budget-memories-guest
+      - end-user-budget-search-guest
+    end_user_budget_id: end-user-budget-ai-guest
+    ceiling: mlpa-guest-global
 
   # MLPA's load tests, the counterpart of LiteLLM's custom virtual key (MLPA
   # #251, #269): with ALLOW_CUSTOM_VIRTUAL_KEY, MLPA forwards the client's

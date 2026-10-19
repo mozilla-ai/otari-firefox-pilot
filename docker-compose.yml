@@ -5,7 +5,8 @@
 # another git URL or a local checkout.
 #
 # MLPA's service key is a fixed local value, like the master key: otari-config.yml
-# declares it from MLPA_SERVICE_KEY, and MLPA sends it as OTARI_SERVICE_KEY.
+# declares it from MLPA_SERVICE_KEY, and MLPA sends it as OTARI_SERVICE_KEY. Its
+# guest key is the same with MLPA_GUEST_SERVICE_KEY and OTARI_GUEST_SERVICE_KEY.
 # MLPA_LOADTEST_KEY and MLPA_CONCURRENCY_KEY are the load and concurrency tests'
 # keys, which their clients send through MLPA.
 name: otari-pilot
@@ -39,7 +40,7 @@ services:
       interval: 60s
 
   otari:
-    build: ${OTARI_SRC:-https://github.com/mozilla-ai/otari.git#v0.25.0}
+    build: ${OTARI_SRC:-https://github.com/mozilla-ai/otari.git#v0.28.0}
     image: otari-pilot-otari
     # The image listens on 0.0.0.0:8000 (OTARI_HOST, OTARI_PORT).
     command: ["otari", "serve", "-c", "/rig/otari-config.yml"]
@@ -50,6 +51,7 @@ services:
     environment:
       OTARI_MASTER_KEY: ${OTARI_MASTER_KEY:-sk-otari-pilot}
       MLPA_SERVICE_KEY: ${MLPA_SERVICE_KEY:-tk-pilot-Bbm0emYZ6RTy8R-5RrxM8nUyqVVdEHC2nfiDRVcIGGiEhpoDHMyEwKtk6eW48vgb}
+      MLPA_GUEST_SERVICE_KEY: ${MLPA_GUEST_SERVICE_KEY:-tk-guest-RbVDhjO_aH33-oHJBSKuXVkjr4LfeQGPoCP1_iQdzktWoEiW7stng5lIPvmcunco}
       MLPA_CONCURRENCY_KEY: ${MLPA_CONCURRENCY_KEY:-tk-concurrency-ZKgQTTGyZ6M3ki2Qaj3NB-az9zHZ5nB__yyucrfoHIAm1zmhJaiQXfqNwwQUIJtt}
       MLPA_LOADTEST_KEY: ${MLPA_LOADTEST_KEY:-tk-loadtest-sOQPAEg4pls6G33bAJO65LQgRXfINGRaFj9A-k2ER94EOAH2hhEByzG6fby_17nC}
       # Vertex authenticates through Google's default credentials, as on GKE.
@@ -86,6 +88,7 @@ services:
     volumes: ["./devauth:/devauth:ro"]
     environment:
       OTARI_SERVICE_KEY: ${MLPA_SERVICE_KEY:-tk-pilot-Bbm0emYZ6RTy8R-5RrxM8nUyqVVdEHC2nfiDRVcIGGiEhpoDHMyEwKtk6eW48vgb}
+      OTARI_GUEST_SERVICE_KEY: ${MLPA_GUEST_SERVICE_KEY:-tk-guest-RbVDhjO_aH33-oHJBSKuXVkjr4LfeQGPoCP1_iQdzktWoEiW7stng5lIPvmcunco}
       # The fake Mozilla account (devauth/sitecustomize.py); off with REAL_ACCOUNT=1.
       PYTHONPATH: /devauth
       PILOT_FXA_TOKEN: pilot-fxa-token

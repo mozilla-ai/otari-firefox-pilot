@@ -30,19 +30,23 @@ Otari's dashboard is at http://127.0.0.1:8100 (master key `sk-otari-pilot`).
 
 | Piece | Source | Override |
 |---|---|---|
-| Otari | [v0.25.0](https://github.com/mozilla-ai/otari/releases/tag/v0.25.0), unmodified | `OTARI_SRC` |
+| Otari | [v0.28.0](https://github.com/mozilla-ai/otari/releases/tag/v0.28.0), unmodified | `OTARI_SRC` |
 | MLPA | [daavoo/MLPA@otari-pilot](https://github.com/Firefox-AI/MLPA/compare/main...daavoo:MLPA:otari-pilot) | `MLPA_SRC` |
 | Firefox | latest Nightly, unmodified | `FIREFOX` |
 
 ## How MLPA uses Otari
 
-- **One key.** MLPA holds one Otari service key. Each request names the user (`<identity>:<service
-  type>`, same ids as LiteLLM) and the service type's budget. Otari creates the user on first request.
+- **One key** for signed-in users (guests get their own, below). Each request names the user
+  (`<identity>:<service type>`, same ids as LiteLLM) and the service type's budget. Otari creates the
+  user on first request.
 - **Budgets.** One Otari budget per service type (dollars, RPM, TPM), plus a ceiling on the key as the
   global budget. They are declared in [`otari-config.yml`](otari-config.yml) and reset at UTC midnight.
-- **Admin.** MLPA blocks, unblocks and moves users with the same key. It holds no master key.
+- **Guests.** Guest tokens (#296) are served on a second key, `mlpa-guest`, with the same owner. It
+  may assign only the guest budgets, and its ceiling pools every guest apart from signed-in users.
+- **Admin.** MLPA blocks, unblocks and moves users, guests included, with the service key. It holds
+  no master key.
 - **Errors.** MLPA maps Otari's error codes to its own (1 budget, 2 rate limit, 3 context, 5 provider
-  429, 8 unknown model, 10 global budget). No text matching.
+  429, 8 unknown model, 10 global budget, 11 guest budget). No text matching.
 - **Routing.** Fallback on provider 429/5xx and the "Qwen up to N RPM, then Gemini" overflow are config
   (`routing:` and `rate_limits:` in `otari-config.yml`), counted in Redis across replicas.
 

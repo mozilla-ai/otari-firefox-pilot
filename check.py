@@ -15,6 +15,7 @@ import time
 import uuid
 
 import httpx
+import jwt
 
 from mlpa.core.utils import issue_mlpa_access_token
 
@@ -106,17 +107,22 @@ def otari_end_user(external_id: str) -> dict | None:
     return users[0] if users else None
 
 
-# One service key for every service type, listing each one's budget
-mlpa_keys = [
-    k
+# One service key for every signed-in service type, and one for guests, both
+# owned by `mlpa`, each listing only its own budgets
+mlpa_keys = {
+    k["config_name"]: k
     for k in client.get(f"{OTARI}/keys", headers=OTARI_MASTER).json()
     if k["user_id"] == "mlpa"
-]
+}
+service_key, guest_key = mlpa_keys.get("mlpa"), mlpa_keys.get("mlpa-guest")
 check(
-    "otari: one service key lists every service type's budget",
-    len(mlpa_keys) == 1
-    and mlpa_keys[0]["is_service_key"]
-    and "end-user-budget-memories-dev" in mlpa_keys[0]["end_user_budget_ids"],
+    "otari: a service key and a guest key, each listing only its own budgets",
+    set(mlpa_keys) == {"mlpa", "mlpa-guest"}
+    and service_key["is_service_key"]
+    and guest_key["is_service_key"]
+    and "end-user-budget-memories-dev" in service_key["end_user_budget_ids"]
+    and not any(b.endswith("-guest") for b in service_key["end_user_budget_ids"])
+    and all(b.endswith("-guest") for b in guest_key["end_user_budget_ids"]),
     mlpa_keys,
 )
 
@@ -615,6 +621,77 @@ check(
     and error_code(r) == 10
     and r.headers.get("retry-after") == "300",
     (r.status_code, r.text),
+)
+
+# Guests (#296): a guest token, served on MLPA's guest key and the guest budgets.
+def guest_token() -> str:
+    response = client.get(
+        f"{MLPA}/verify/v1/guest", headers={"Accept": "application/json"}
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
+def guest_chat(token: str) -> httpx.Response:
+    return client.post(
+        f"{MLPA}/v1/chat/completions",
+        json={
+            "model": "gemini-3.1-flash-lite",
+            "messages": [{"role": "user", "content": "Reply with OK."}],
+            "max_tokens": 5,
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+            "service-type": "ai",
+            "purpose": "chat",
+            "User-Agent": "Mozilla/5.0 (Macintosh) Gecko/20100101 Firefox/146.0",
+        },
+    )
+
+
+token = guest_token()
+guest_id = jwt.decode(token, options={"verify_signature": False})["sub"]
+r = guest_chat(token)
+guest = otari_end_user(f"{guest_id}:ai-guest")
+check(
+    "guest token -> served as ai-guest, on the guest budget",
+    r.status_code == 200
+    and guest is not None
+    and guest["budget_id"] == "end-user-budget-ai-guest",
+    (r.status_code, r.text[:200], guest),
+)
+r = client.get(f"{MLPA}/user/{guest_id}:ai-guest")
+check(
+    "MLPA reads a guest with its service key (both keys share an owner)",
+    r.status_code == 200 and r.json().get("budget_id") == "end-user-budget-ai-guest",
+    (r.status_code, r.text),
+)
+# The guest budget: the guest key's ceiling, pooling every guest. Lowered below
+# any request for a moment: guests are refused, signed-in users are not.
+guest_budget = client.get(
+    f"{OTARI}/budgets/mlpa-guest-global", headers=OTARI_MASTER
+).json()
+client.patch(
+    f"{OTARI}/budgets/mlpa-guest-global",
+    json={"max_budget": 0.000001},
+    headers=OTARI_MASTER,
+)
+try:
+    r = guest_chat(guest_token())
+    signed_in = chat(identity(), "ai", "gemini-3.1-flash-lite", purpose="chat")
+finally:
+    client.patch(
+        f"{OTARI}/budgets/mlpa-guest-global",
+        json={"max_budget": guest_budget["max_budget"]},
+        headers=OTARI_MASTER,
+    )
+check(
+    "guest budget (the guest key's ceiling) -> 429 {error: 11}, signed-in users unaffected",
+    r.status_code == 429
+    and error_code(r) == 11
+    and r.headers.get("retry-after") == "3600"
+    and signed_in.status_code == 200,
+    (r.status_code, r.text, signed_in.status_code),
 )
 
 limited = identity()
